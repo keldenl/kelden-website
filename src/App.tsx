@@ -290,10 +290,12 @@ zsh: no llm loaded
     }
   }, [chatAction, generating, inputLocked, makeIO, modelLoaded]);
 
+  const backgroundImageUrl = `${import.meta.env.BASE_URL}26-Tahoe-Dark-6K-thumb.jpg`;
+
   return (
     <div
       className="min-h-screen flex items-center justify-center p-4 bg-cover bg-center bg-no-repeat"
-      style={{ backgroundImage: "url('/26-Tahoe-Dark-6K-thumb.jpg')" }}
+      style={{ backgroundImage: `url('${backgroundImageUrl}')` }}
     >
       <Terminal
         messages={messages}
