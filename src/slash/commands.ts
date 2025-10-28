@@ -67,7 +67,7 @@ export const Status: Command = {
 
 export const Download: Command = {
   name: "download",
-  summary: "Download the starter model (639MB)",
+  summary: "Download the starter model",
   usage: "/download",
   examples: ["/download"],
   async run(_a, _f, io, ctx) {
@@ -75,12 +75,12 @@ export const Download: Command = {
     const total = state.modelSizeGB ?? 1.28;
     const id = "download";
     const modelName = state.modelName ?? "starter.gguf";
-    const startMessage = `→ fetching model: ${modelName} (${total}MB)\n  ${bar(0)}`;
+    const startMessage = `→ fetching model: ${modelName} (${total}GB)\n  ${bar(0)}`;
     if (io.startLive) io.startLive(id, startMessage);
     else io.println(startMessage);
-    await ctx.actions.download((loaded, totalMB) => {
-      const pct = Math.min(100, (loaded / (totalMB || total)) * 100);
-      const msg = `→ fetching model: ${modelName} (${total}MB)\n  ${bar(pct)}`;
+    await ctx.actions.download((loaded, totalGB) => {
+      const pct = Math.min(100, (loaded / (totalGB || total)) * 100);
+      const msg = `→ fetching model: ${modelName} (${total}GB)\n  ${bar(pct)}`;
       if (io.updateLive) io.updateLive(id, msg);
       else io.println(msg);
     });
@@ -106,7 +106,7 @@ export const Load: Command = {
     }
     io.println(`loading ${s.modelName ?? "model"} ...`);
     await ctx.actions.load();
-    io.println("✓ model loaded\nthreads: 8\ncontext: 4096 tokens\nlatency: ~11ms/token\n tip: /chat write hello");
+    io.println("✓ model loaded\nthreads: 8\ncontext: 4096 tokens\nlatency: ~11ms/token\n tip: type a message to start chatting");
   },
 };
 
@@ -158,39 +158,31 @@ export const Clear: Command = {
   },
 };
 
-export const Exit: Command = {
-  name: "exit",
-  summary: "Exit the session",
-  usage: "/exit",
-  examples: ["/exit"],
-  run(_a, _f, io) {
-    io.println("bye 👋\n(session ended)");
-    io.lockInput?.();
+export const Think: Command = {
+  name: "think",
+  summary: "Enable model thinking output for future prompts",
+  usage: "/think",
+  run(_a, _f, io, ctx) {
+    if (ctx.getState().thinking) {
+      io.println("thinking is already enabled.");
+      return;
+    }
+    ctx.actions.setThinking(true);
+    io.println("thinking enabled. future prompts will include /think.");
   },
 };
 
-export const Chat: Command = {
-  name: "chat",
-  summary: "Chat with the model: /chat <message>",
-  usage: "/chat <message>",
-  examples: ["/chat how do I center a div?"],
-  async run(args, _f, io, ctx) {
-    const s = ctx.getState();
-    if (!s.loaded) {
-      io.println("zsh: no llm loaded\n\t run /load first");
+export const NoThink: Command = {
+  name: "no_think",
+  aliases: ["nothink"],
+  summary: "Disable model thinking output for future prompts",
+  usage: "/no_think",
+  run(_a, _f, io, ctx) {
+    if (!ctx.getState().thinking) {
+      io.println("thinking is already disabled.");
       return;
     }
-    const prompt = args.join(" ").trim();
-    if (!prompt) {
-      io.println("usage: /chat <message>");
-      return;
-    }
-    let last = "";
-    const out = await ctx.actions.chat(prompt, (cur) => {
-      const next = cur.slice(last.length);
-      last = cur;
-      if (next) io.println(next);
-    });
-    if (!last) io.println(out);
+    ctx.actions.setThinking(false);
+    io.println("thinking disabled. future prompts will include /no_think.");
   },
 };

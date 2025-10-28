@@ -17,6 +17,7 @@ export type CommandContext = {
     chats: number;
     modelName?: string;
     modelSizeGB?: number;
+    thinking: boolean;
   };
   actions: {
     download: (onProgress?: (loadedMB: number, totalMB: number) => void) => Promise<void>;
@@ -24,6 +25,7 @@ export type CommandContext = {
     unload: () => Promise<void>;
     chat: (prompt: string, onStream?: (text: string) => void) => Promise<string>;
     clearCache: () => Promise<void>;
+    setThinking: (next: boolean) => void;
   };
 };
 

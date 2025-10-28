@@ -39,6 +39,7 @@ function App() {
   const [chats, setChats] = useState<number>(0);
   const [latestResponse, setLatestResponse] = useState<string>('');
   const [inputLocked, setInputLocked] = useState<boolean>(false);
+  const [thinkingEnabled, setThinkingEnabled] = useState<boolean>(false);
 
   const initialBanner = `Last login: ${currentDate.toDateString()} ${currentDate.toTimeString().split(' ')[0]} on ttys030
 zsh: no llm loaded
@@ -237,6 +238,7 @@ zsh: no llm loaded
         chats,
         modelName: MODEL_NAME,
         modelSizeGB: MODEL_SIZE_GB,
+        thinking: thinkingEnabled,
       }),
       actions: {
         download: downloadAction,
@@ -244,6 +246,7 @@ zsh: no llm loaded
         unload: unloadAction,
         chat: chatAction,
         clearCache: clearCacheAction,
+        setThinking: setThinkingEnabled,
       },
     };
     if (!slashRef.current) {
@@ -251,7 +254,7 @@ zsh: no llm loaded
     } else {
       (slashRef.current.dispatch as any).setContext?.(ctx);
     }
-  }, [downloaded, modelLoaded, chats, downloadAction, loadAction, unloadAction, chatAction, clearCacheAction]);
+  }, [downloaded, modelLoaded, chats, downloadAction, loadAction, unloadAction, chatAction, clearCacheAction, thinkingEnabled]);
 
   useEffect(() => {
     if (!modelLoaded) return;
@@ -264,7 +267,7 @@ zsh: no llm loaded
     }
   }, []);
 
-  const handleSendMessage = useCallback(async (value: string, thinking: boolean = false) => {
+  const handleSendMessage = useCallback(async (value: string) => {
     const trimmed = value.trim();
     if (!trimmed || inputLocked) return;
 
@@ -294,7 +297,8 @@ zsh: no llm loaded
     }
 
     try {
-      await chatAction(`${value}${!thinking ? ' /no_think' : ''}`, current => setLatestResponse(current));
+      const prompt = `${value}${thinkingEnabled ? '/think' : ' /no_think'}`;
+      await chatAction(prompt, current => setLatestResponse(current));
     } catch (error: any) {
       const message = error?.message ?? String(error);
       const fallback = message.includes('loadModel() is not yet called')
@@ -305,7 +309,7 @@ zsh: no llm loaded
       setGenerating(false);
       setLatestResponse('');
     }
-  }, [chatAction, generating, inputLocked, makeIO, modelLoaded]);
+  }, [chatAction, generating, inputLocked, makeIO, modelLoaded, thinkingEnabled]);
 
   const backgroundImageUrl = `${import.meta.env.BASE_URL}26-Tahoe-Dark-6K-thumb.jpg`;
 

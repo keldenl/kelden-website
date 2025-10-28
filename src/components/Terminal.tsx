@@ -2,45 +2,76 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Prompt } from './Prompt';
 import type { WllamaChatMessage } from '@wllama/wllama/esm';
 
-const THINK_BLOCK_REGEX = /<think>([\s\S]*?)<\/think>/gi;
+const THINK_TAG_REGEX = /<\/?think>/gi;
 
-const renderAssistantContent = (content: string): React.ReactNode => {
+type RenderOptions = {
+  streaming?: boolean;
+};
+
+type Segment = {
+  type: 'text' | 'think';
+  value: string;
+  thinkId?: number;
+};
+
+const renderAssistantContent = (content: string, options?: RenderOptions): React.ReactNode => {
   if (!content) return null;
 
-  THINK_BLOCK_REGEX.lastIndex = 0;
+  THINK_TAG_REGEX.lastIndex = 0;
 
-  const segments: Array<{ type: 'text' | 'think'; value: string }> = [];
+  const segments: Segment[] = [];
   let cursor = 0;
   let match: RegExpExecArray | null;
+  let thinkCounter = 0;
+  const thinkStack: number[] = [];
 
-  while ((match = THINK_BLOCK_REGEX.exec(content)) !== null) {
+  const currentThinkId = () => thinkStack[thinkStack.length - 1];
+
+  const pushSegment = (rawValue: string) => {
+    if (!rawValue) return;
+    const type: Segment['type'] = thinkStack.length > 0 ? 'think' : 'text';
+    const value = type === 'think' ? rawValue.trim() : rawValue;
+    if (type === 'think' && value.length === 0) {
+      return;
+    }
+    const segment: Segment = { type, value };
+    if (type === 'think') {
+      segment.thinkId = currentThinkId();
+    }
+    segments.push(segment);
+  };
+
+  while ((match = THINK_TAG_REGEX.exec(content)) !== null) {
     const leading = content.slice(cursor, match.index);
-    if (leading) {
-      segments.push({ type: 'text', value: leading });
+    pushSegment(leading);
+
+    const tag = match[0].toLowerCase();
+    if (tag === '<think>') {
+      thinkCounter += 1;
+      thinkStack.push(thinkCounter);
+    } else if (thinkStack.length > 0) {
+      thinkStack.pop();
     }
 
-    const thinking = match[1];
-    if (thinking && thinking.trim().length > 0) {
-      segments.push({ type: 'think', value: thinking.trim() });
-    }
-
-    cursor = THINK_BLOCK_REGEX.lastIndex;
+    cursor = THINK_TAG_REGEX.lastIndex;
   }
 
   const trailing = content.slice(cursor);
-  if (trailing) {
-    segments.push({ type: 'text', value: trailing });
-  }
+  pushSegment(trailing);
 
   if (segments.length === 0) {
     return null;
   }
 
-  segments.forEach((segment) => {
-    if (segment.type === 'text') {
-      segment.value = segment.value.replace(/<\/?think>/gi, '');
-    }
-  });
+  if (thinkStack.length > 0 && !options?.streaming) {
+    const openThinkIds = new Set(thinkStack);
+    segments.forEach((segment) => {
+      if (segment.type === 'think' && segment.thinkId !== undefined && openThinkIds.has(segment.thinkId)) {
+        segment.type = 'text';
+        delete segment.thinkId;
+      }
+    });
+  }
 
   const firstTextSegment =
     segments.find((segment) => segment.type === 'text' && segment.value.trim().length > 0) ??
@@ -61,7 +92,7 @@ const renderAssistantContent = (content: string): React.ReactNode => {
     return (
       <div
         key={`think-${index}`}
-        className="block italic text-white/60 whitespace-pre-wrap"
+        className="block italic text-white/60 text-xs whitespace-pre-wrap"
       >
         {segment.value}
       </div>
@@ -191,7 +222,7 @@ const Terminal: React.FC<TerminalProps> = ({
   };
 
   return (
-    <div className="w-full max-w-4xl h-[80vh] min-h-[400px] bg-black/60 backdrop-blur-md border border-white/10 rounded-xl shadow-2xl flex flex-col font-mono text-sm">
+    <div className="w-full max-w-4xl h-[80vh] min-h-[400px] bg-black/60 backdrop-blur-md border border-white/10 rounded-xl shadow-2xl flex flex-col font-mono text-sm" onClick={() => textareaRef.current?.focus()}>
       {/* Title Bar */}
       <div className="bg-[#21252b] flex items-center px-4 py-1 rounded-t-xl border-b border-black/20 flex-shrink-0">
         <div className="flex space-x-2">
@@ -269,7 +300,7 @@ const Terminal: React.FC<TerminalProps> = ({
           })}
           {latestResponse && (
             <div className="whitespace-pre-wrap mt-1 mb-2">
-              {renderAssistantContent(latestResponse)}
+              {renderAssistantContent(latestResponse, { streaming: true })}
             </div>
           )}
           
