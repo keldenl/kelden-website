@@ -1,218 +1,310 @@
-import { useEffect, useState } from 'react'
-import './App.css'
-import { WLLAMA_CONFIG_PATHS } from './utils/wllama/config'
-import { Model, ModelManager, Wllama, type WllamaChatMessage } from '@wllama/wllama'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import './App.css';
+import { WLLAMA_CONFIG_PATHS } from './utils/wllama/config';
+import { Model, ModelManager, Wllama, type WllamaChatMessage } from '@wllama/wllama/esm';
 import Terminal from './components/Terminal';
+import { createSlashSystem, type IO } from './slash';
 
 const wllamaInstance = new Wllama(WLLAMA_CONFIG_PATHS);
 const currentDate = new Date();
-const SYSTEM_PROMPT = `You are a clone of Kelden Lin, a software engineer. You answer as him as you are his clone. Here is what you need to know about him:
-- He is a software engineer at Axon.
-- He was born in September 1997 (do the math yourself for his age).
+const SYSTEM_PROMPT = `You are Kelden Lin's clone. You live on keldenl.com and are here to help visitors.
 
+## Identity & Mission
+- You (Kelden Lin) are a playful, tech-forward senior software engineer specializing in developing AI platforms.
+- Kelden is 28 years old and lives in Seattle, Washington. He was born in September.
+- Keep everything in English.
 
-It is currently ${currentDate.toLocaleDateString()} and ${currentDate.toLocaleTimeString()}.`
+## Voice & Tone
+- Reply in lower case, short lines, candid and breezy.
+- Stay playful but keep it sharp.
 
+It is currently ${currentDate.toLocaleDateString()} and ${currentDate.toLocaleTimeString()}.`;
 
+const MODEL_SIZE_MB = 639;
+const MODEL_NAME = 'ai model';
+
+const toAssistantMessage = (content: string): WllamaChatMessage => ({
+  role: 'assistant',
+  content,
+});
 
 function App() {
+  const modelManager = useMemo(() => new ModelManager(), []);
+
   const [models, setModels] = useState<Model[]>([]);
-  const [loadingModel, setLoadingModel] = useState<boolean>(false);
+  const modelsRef = useRef<Model[]>([]);
   const [modelLoaded, setModelLoaded] = useState<boolean>(false);
-  const modelManager = new ModelManager();
-
-  async function downloadModel(model: any) {
-    try {
-      await modelManager.downloadModel(model.url, {
-        progressCallback(opts) {
-          console.log(opts);
-          // updateModelDownloadState(model.url, opts.loaded / opts.total);
-        },
-      });
-      // updateModelDownloadState(model.url, -1);
-      // await refreshCachedModels();
-    } catch (e) {
-      alert((e as any)?.message || 'unknown error while downloading model');
-    }
-  };
-
-  async function listModels() {
-    const models = await modelManager.getModels();
-    return models;
-  }
-
-  async function loadModel(model: Model) {
-    try {
-      setLoadingModel(true);
-      await wllamaInstance.loadModel(model);
-      // setLoadedModel(model.clone({ state: ModelState.LOADED }));
-      setModelLoaded(true);
-      console.log({
-        isMultithread: wllamaInstance.isMultithread(),
-        hasChatTemplate: !!wllamaInstance.getChatTemplate(),
-      });
-    } catch (e) {
-      alert(`Failed to load model: ${(e as any).message ?? 'Unknown error'}`);
-    } finally {
-      setLoadingModel(false);
-    }
-  };
-
-  async function unloadModel() {
-    await wllamaInstance.exit();
-  };
-
+  const [downloaded, setDownloaded] = useState<boolean>(false);
   const [generating, setGenerating] = useState<boolean>(false);
-  const [input, setInput] = useState<string>('');
-  const [messages, setMessages] = useState<WllamaChatMessage[]>([{
-    role: 'system',
-    content: SYSTEM_PROMPT,
-  }]);
+  const [chats, setChats] = useState<number>(0);
   const [latestResponse, setLatestResponse] = useState<string>('');
+  const [inputLocked, setInputLocked] = useState<boolean>(false);
 
-  async function createCompletion(
-    input: string,
-    deltaCallback: (currentText: string) => void,
-    completeCallback: (outputText: string) => void
-  ) {
-    setGenerating(true);
-    // stopSignal = false;
-    const updatedMessages: WllamaChatMessage[] = [...messages, { role: 'user', content: input }];
-    setMessages(updatedMessages);
+  const initialBanner = `Last login: ${currentDate.toDateString()} ${currentDate.toTimeString().split(' ')[0]} on ttys030
+zsh: no llm loaded
+    run /download to install ai model (${MODEL_SIZE_MB}MB)
+    run /load to load it if you already downloaded it
+    run /help for commands`;
 
-    const result = await wllamaInstance.createChatCompletion(updatedMessages, {
-      nPredict: 4096,
-      sampling: {
-        temp: 1,
-      },
-      // @ts-expect-error unused variable
-      onNewToken(token, piece, currentText, _optionals) {
-        deltaCallback(currentText)
-        // if (stopSignal) optionals.abortSignal();
-      },
-      // required to fix the wrong typing
-    });
-    completeCallback(result);
-    // stopSignal = false;
-    setGenerating(false);
-  };
+  const [messages, setMessages] = useState<WllamaChatMessage[]>([
+    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'assistant', content: initialBanner },
+  ]);
 
+  const conversationRef = useRef<WllamaChatMessage[]>([
+    { role: 'system', content: SYSTEM_PROMPT },
+  ]);
+  const slashRef = useRef<ReturnType<typeof createSlashSystem> | null>(null);
 
   useEffect(() => {
-    listModels().then((models) => {
-      console.log(models);
-      setModels(models);
-      if (models.length > 0 && !loadingModel && !modelLoaded) {
-        loadModel(models[0]);
-      }
+    modelsRef.current = models;
+  }, [models]);
+
+  useEffect(() => {
+    async function refreshModels() {
+      const available = await modelManager.getModels();
+      setModels(available);
+      setDownloaded(available.length > 0);
+    }
+    refreshModels().catch((error) => {
+      console.error('failed to fetch models', error);
     });
+  }, [modelManager]);
+
+  const makeIO = useCallback((options?: { coalesce?: boolean }): IO => {
+    const coalesce = options?.coalesce ?? false;
+    let messageIndex: number | null = coalesce ? null : null;
+    const liveIndices = new Map<string, number>();
+
+    const appendBlock = (text: string) => {
+      setMessages(prev => {
+        if (!coalesce) {
+          return [...prev, toAssistantMessage(text)];
+        }
+        if (messageIndex === null) {
+          const next = [...prev, toAssistantMessage(text)];
+          messageIndex = next.length - 1;
+          return next;
+        }
+        const idx = messageIndex;
+        if (idx < 0 || idx >= prev.length || prev[idx].role !== 'assistant') {
+          const next = [...prev, toAssistantMessage(text)];
+          messageIndex = next.length - 1;
+          return next;
+        }
+        const next = [...prev];
+        const existing = next[idx];
+        const content = existing.content
+          ? `${existing.content}\n${text}`
+          : text;
+        next[idx] = { ...existing, content };
+        return next;
+      });
+    };
+
+    const io: IO = {
+      println(line: string) {
+        appendBlock(line);
+      },
+    };
+
+    io.printLines = (lines: string[]) => {
+      if (lines.length === 0) return;
+      appendBlock(lines.join('\n'));
+    };
+
+    io.startLive = (id: string, line: string) => {
+      setMessages(prev => {
+        const message = toAssistantMessage(line);
+        const next = [...prev, message];
+        const idx = next.length - 1;
+        if (coalesce) {
+          messageIndex = idx;
+        }
+        liveIndices.set(id, idx);
+        return next;
+      });
+    };
+
+    io.updateLive = (id: string, line: string) => {
+      const idx = liveIndices.get(id);
+      if (idx === undefined) {
+        appendBlock(line);
+        return;
+      }
+      setMessages(prev => {
+        if (idx < 0 || idx >= prev.length) return prev;
+        const target = prev[idx];
+        if (!target || target.role !== 'assistant') return prev;
+        const next = [...prev];
+        next[idx] = { ...target, content: line };
+        return next;
+      });
+    };
+
+    io.endLive = (id: string) => {
+      liveIndices.delete(id);
+    };
+
+    io.clearScreen = () => {
+      messageIndex = null;
+      liveIndices.clear();
+      setMessages(prev => {
+        if (prev.length <= 2) return prev;
+        return prev.slice(0, 2);
+      });
+    };
+    io.lockInput = () => {
+      setInputLocked(true);
+    };
+    return io;
   }, []);
 
-  // return (
-  //   <>
-  //     <div>
-  //       <button onClick={() => downloadModel({ url: 'https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf' })}>
-  //         Download Model
-  //       </button>
-  //       {models.map((model) => (
-  //         <button key={model.url} onClick={() => loadModel(model)}>
-  //           Load Model {model.url}
-  //         </button>
-  //       ))}
-  //       <button onClick={() => unloadModel()}>
-  //         Unload Model
-  //       </button>
+  const downloadAction = useCallback(async (onProgress?: (loaded: number, total: number) => void) => {
+    const model = modelsRef.current[0] ?? {
+      url: 'https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf',
+    };
+    await modelManager.downloadModel(model.url, {
+      progressCallback(opts) {
+        onProgress?.(opts.loaded / (1024 * 1024), opts.total / (1024 * 1024));
+      },
+    });
+    setDownloaded(true);
+    const refreshed = await modelManager.getModels();
+    setModels(refreshed);
+  }, [modelManager]);
 
-  //       <input type="text" value={input} onChange={(e) => setInput(e.target.value)} />
-  //       <button onClick={() => 
-  //       createCompletion(input, 
-  //         // delta
-  //         (currentText) => {
-  //           setLatestResponse(currentText);
-  //           console.log({ currentText });
-  //         }, 
-  //         // output
-  //         (outputText) => {
-  //           setLatestResponse('');
-  //           setMessages([...messages, { role: 'assistant', content: outputText }]);
-  //           console.log({ outputText });
-  //         })}
-  //       >
-  //         Generate
-  //       </button>
-  //       {messages.map((message, index) => {
-  //         // if (message.role === 'system') return null;
-  //         return <div key={index}>
-  //           <p>{message.role}: {message.content}</p>
-  //         </div>
-  //       })}
-  //       {latestResponse && <p>Assistant: {latestResponse}</p>}
-  //       </div>
-  //   </>
-  // )
+  const loadAction = useCallback(async () => {
+    const model = modelsRef.current[0];
+    if (!model) throw new Error('No model available');
+    await wllamaInstance.loadModel(model, {
+      // n_ctx: 4096,
+      // n_threads: -1,
+      // n_batch: 128,
+    });
+    setModelLoaded(true);
+  }, []);
 
-  async function handleSendMessage(input: string) {
-    if (!input.trim() || generating || !modelLoaded) return;
+  const unloadAction = useCallback(async () => {
+    await wllamaInstance.exit();
+    setModelLoaded(false);
+  }, []);
 
-    
+  const chatAction = useCallback(async (prompt: string, onStream?: (text: string) => void) => {
+    const userMessage: WllamaChatMessage = { role: 'user', content: prompt };
+    conversationRef.current.push(userMessage);
+    try {
+      const result = await wllamaInstance.createChatCompletion(conversationRef.current, {
+        // nPredict: 8096,
+        sampling: { temp: 1 },
+        onNewToken: (_token: any, _piece: any, currentText: string) => {
+          onStream?.(currentText);
+        },
+      });
+      setLatestResponse('');
+      const assistantMessage: WllamaChatMessage = { role: 'assistant', content: result };
+      conversationRef.current.push(assistantMessage);
+      setMessages(prev => [...prev, assistantMessage]);
+      setChats(prev => prev + 1);
+      return result;
+    } catch (error) {
+      conversationRef.current.pop();
+      throw error;
+    }
+  }, []);
+
+  useEffect(() => {
+    const ctx = {
+      getState: () => ({
+        downloaded,
+        loaded: modelLoaded,
+        chats,
+        modelName: MODEL_NAME,
+        modelSizeMB: MODEL_SIZE_MB,
+      }),
+      actions: {
+        download: downloadAction,
+        load: loadAction,
+        unload: unloadAction,
+        chat: chatAction,
+      },
+    };
+    if (!slashRef.current) {
+      slashRef.current = createSlashSystem(ctx);
+    } else {
+      (slashRef.current.dispatch as any).setContext?.(ctx);
+    }
+  }, [downloaded, modelLoaded, chats, downloadAction, loadAction, unloadAction, chatAction]);
+
+  useEffect(() => {
+    if (!modelLoaded) return;
+    setDownloaded(true);
+  }, [modelLoaded]);
+
+  useEffect(() => {
+    return () => {
+      unloadAction();
+    }
+  }, []);
+
+  const handleSendMessage = useCallback(async (value: string, thinking: boolean = false) => {
+    const trimmed = value.trim();
+    if (!trimmed || inputLocked) return;
+
+    const userMessage: WllamaChatMessage = { role: 'user', content: value };
+    setMessages(prev => [...prev, userMessage]);
+
     setGenerating(true);
-    setLatestResponse('');
-    const updatedMessages: WllamaChatMessage[] = [...messages, { role: 'user', content: input }];
-    setMessages(updatedMessages);
-    
-    if (input.trim() === '/unload') {
-      await unloadModel();
-      setMessages(prevMessages => [...prevMessages, { role: 'assistant', content: "LLM unloaded. Type /load to it again" }]);
-      setLatestResponse('');
+    const slashIO = makeIO({ coalesce: true });
+    const handled = await slashRef.current?.dispatch(value, slashIO);
+    if (handled) {
       setGenerating(false);
-    } else if (input.trim() === '/download') {
-      await downloadModel(models[0]);
-      setMessages(prevMessages => [...prevMessages, { role: 'assistant', content: "LLM downloaded. Type /load to load it" }]);
-      setLatestResponse('');
+      return;
+    }
+
+    const io = makeIO();
+
+    if (generating) {
+      io.println('still processing previous request. try again shortly.');
       setGenerating(false);
-    } else if (input.trim() === '/load') {
-      await loadModel(models[0]);
-      setMessages(prevMessages => [...prevMessages, { role: 'assistant', content: "LLM loaded. Type /unload to unload it" }]);
-      setLatestResponse('');
+      return;
+    }
+
+    if (!modelLoaded) {
+      io.println('zsh: no llm loaded\n\t run /download then /load');
       setGenerating(false);
+      return;
     }
 
     try {
-      const result = await wllamaInstance.createChatCompletion(updatedMessages, {
-        nPredict: 4096,
-        sampling: { temp: 1 },
-        onNewToken: (_token: any, _piece: any, currentText: string) => {
-          setLatestResponse(currentText);
-        },
-      });
-
-      setMessages(prevMessages => [...prevMessages, { role: 'assistant', content: result }]);
-    } catch (e) {
-      const errorMessage = (e as any)?.message ?? 'Unknown error';
-      let finalErrorMessage= ""
-
-      if (errorMessage.includes('loadModel() is not yet called')) {
-        finalErrorMessage = "zsh: no llm downloaded\n\ttype /download to download the model (639MB)";
-      } else {
-        finalErrorMessage = `Error: ${errorMessage}`;
-      }
-      setMessages(prevMessages => [...prevMessages, { role: 'assistant', content: finalErrorMessage }]);
+      await chatAction(`${value}${!thinking ? ' /no_think' : ''}`, current => setLatestResponse(current));
+    } catch (error: any) {
+      const message = error?.message ?? String(error);
+      const fallback = message.includes('loadModel() is not yet called')
+        ? 'zsh: no llm loaded\n\t run /download then /load'
+        : `Error: ${message}`;
+      io.println(fallback);
     } finally {
-      setLatestResponse('');
       setGenerating(false);
+      setLatestResponse('');
     }
-  };
+  }, [chatAction, generating, inputLocked, makeIO, modelLoaded]);
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500">
+    <div
+      className="min-h-screen flex items-center justify-center p-4 bg-cover bg-center bg-no-repeat"
+      style={{ backgroundImage: "url('/26-Tahoe-Dark-6K-thumb.jpg')" }}
+    >
       <Terminal
         messages={messages}
+        setMessages={setMessages}
         onSendMessage={handleSendMessage}
         isGenerating={generating}
         latestResponse={latestResponse}
+        inputLocked={inputLocked}
       />
     </div>
   );
 }
 
-export default App
+export default App;

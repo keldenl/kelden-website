@@ -1,17 +1,11 @@
-export enum Screen {
-    GUIDE,
-    CHAT,
-    MODEL,
-    LOG,
-}
+export type Screen = 'GUIDE' | 'CHAT' | 'MODEL' | 'LOG';
 
-export enum ModelState {
-    NOT_DOWNLOADED,
-    DOWNLOADING,
-    READY,
-    LOADING,
-    LOADED,
-}
+export type ModelState =
+    | 'NOT_DOWNLOADED'
+    | 'DOWNLOADING'
+    | 'READY'
+    | 'LOADING'
+    | 'LOADED';
 
 export interface RuntimeInfo {
     isMultithread: boolean;
