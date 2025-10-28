@@ -20,7 +20,7 @@ const SYSTEM_PROMPT = `You are Kelden Lin's clone. You live on keldenl.com and a
 
 It is currently ${currentDate.toLocaleDateString()} and ${currentDate.toLocaleTimeString()}.`;
 
-const MODEL_SIZE_MB = 639;
+const MODEL_SIZE_GB = 1.28;
 const MODEL_NAME = 'ai model';
 
 const toAssistantMessage = (content: string): WllamaChatMessage => ({
@@ -42,7 +42,7 @@ function App() {
 
   const initialBanner = `Last login: ${currentDate.toDateString()} ${currentDate.toTimeString().split(' ')[0]} on ttys030
 zsh: no llm loaded
-    run /download to install ai model (${MODEL_SIZE_MB}MB)
+    run /download to install ai model (${MODEL_SIZE_GB}GB)
     run /load to load it if you already downloaded it
     run /help for commands`;
 
@@ -162,7 +162,7 @@ zsh: no llm loaded
 
   const downloadAction = useCallback(async (onProgress?: (loaded: number, total: number) => void) => {
     const model = modelsRef.current[0] ?? {
-      url: 'https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf',
+      url: 'https://huggingface.co/enacimie/Qwen3-1.7B-Q4_K_M-GGUF/resolve/main/qwen3-1.7b-q4_k_m-00001-of-00002.gguf',
     };
     await modelManager.downloadModel(model.url, {
       progressCallback(opts) {
@@ -190,13 +190,29 @@ zsh: no llm loaded
     setModelLoaded(false);
   }, []);
 
+  const clearCacheAction = useCallback(async () => {
+    if (modelLoaded) {
+      await unloadAction();
+    }
+    await modelManager.clear();
+    modelsRef.current = [];
+    setModels([]);
+    setDownloaded(false);
+  }, [modelLoaded, modelManager, unloadAction]);
+
   const chatAction = useCallback(async (prompt: string, onStream?: (text: string) => void) => {
     const userMessage: WllamaChatMessage = { role: 'user', content: prompt };
     conversationRef.current.push(userMessage);
     try {
       const result = await wllamaInstance.createChatCompletion(conversationRef.current, {
         // nPredict: 8096,
-        sampling: { temp: 1 },
+        useCache: true,
+        sampling: { 
+          temp: 0.7,
+          top_p: 0.8,
+          top_k: 20,
+          min_p: 0,
+        },
         onNewToken: (_token: any, _piece: any, currentText: string) => {
           onStream?.(currentText);
         },
@@ -220,13 +236,14 @@ zsh: no llm loaded
         loaded: modelLoaded,
         chats,
         modelName: MODEL_NAME,
-        modelSizeMB: MODEL_SIZE_MB,
+        modelSizeGB: MODEL_SIZE_GB,
       }),
       actions: {
         download: downloadAction,
         load: loadAction,
         unload: unloadAction,
         chat: chatAction,
+        clearCache: clearCacheAction,
       },
     };
     if (!slashRef.current) {
@@ -234,7 +251,7 @@ zsh: no llm loaded
     } else {
       (slashRef.current.dispatch as any).setContext?.(ctx);
     }
-  }, [downloaded, modelLoaded, chats, downloadAction, loadAction, unloadAction, chatAction]);
+  }, [downloaded, modelLoaded, chats, downloadAction, loadAction, unloadAction, chatAction, clearCacheAction]);
 
   useEffect(() => {
     if (!modelLoaded) return;

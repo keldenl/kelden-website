@@ -2,6 +2,73 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Prompt } from './Prompt';
 import type { WllamaChatMessage } from '@wllama/wllama/esm';
 
+const THINK_BLOCK_REGEX = /<think>([\s\S]*?)<\/think>/gi;
+
+const renderAssistantContent = (content: string): React.ReactNode => {
+  if (!content) return null;
+
+  THINK_BLOCK_REGEX.lastIndex = 0;
+
+  const segments: Array<{ type: 'text' | 'think'; value: string }> = [];
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = THINK_BLOCK_REGEX.exec(content)) !== null) {
+    const leading = content.slice(cursor, match.index);
+    if (leading) {
+      segments.push({ type: 'text', value: leading });
+    }
+
+    const thinking = match[1];
+    if (thinking && thinking.trim().length > 0) {
+      segments.push({ type: 'think', value: thinking.trim() });
+    }
+
+    cursor = THINK_BLOCK_REGEX.lastIndex;
+  }
+
+  const trailing = content.slice(cursor);
+  if (trailing) {
+    segments.push({ type: 'text', value: trailing });
+  }
+
+  if (segments.length === 0) {
+    return null;
+  }
+
+  segments.forEach((segment) => {
+    if (segment.type === 'text') {
+      segment.value = segment.value.replace(/<\/?think>/gi, '');
+    }
+  });
+
+  const firstTextSegment =
+    segments.find((segment) => segment.type === 'text' && segment.value.trim().length > 0) ??
+    segments.find((segment) => segment.type === 'text');
+  if (firstTextSegment) {
+    firstTextSegment.value = firstTextSegment.value.replace(/^\s+/, '');
+  }
+
+  return segments.map((segment, index) => {
+    if (segment.type === 'text') {
+      return (
+        <React.Fragment key={`text-${index}`}>
+          {segment.value}
+        </React.Fragment>
+      );
+    }
+
+    return (
+      <div
+        key={`think-${index}`}
+        className="block italic text-white/60 whitespace-pre-wrap"
+      >
+        {segment.value}
+      </div>
+    );
+  });
+};
+
 interface TerminalProps {
   messages: WllamaChatMessage[];
   setMessages: (messages: WllamaChatMessage[]) => void;
@@ -194,7 +261,7 @@ const Terminal: React.FC<TerminalProps> = ({
             if (msg.role === 'assistant') {
               return (
                 <div key={index} className="whitespace-pre-wrap mt-1 mb-2">
-                  {msg.content}
+                  {renderAssistantContent(msg.content)}
                 </div>
               );
             }
@@ -202,7 +269,7 @@ const Terminal: React.FC<TerminalProps> = ({
           })}
           {latestResponse && (
             <div className="whitespace-pre-wrap mt-1 mb-2">
-              {latestResponse}
+              {renderAssistantContent(latestResponse)}
             </div>
           )}
           

@@ -36,7 +36,7 @@ export const Status: Command = {
     const s = ctx.getState();
     const payload = {
       model: s.modelName ?? "not installed",
-      sizeMB: s.modelSizeMB ?? null,
+      sizeGB: s.modelSizeGB ?? null,
       downloaded: s.downloaded,
       loaded: s.loaded,
       chats: s.chats,
@@ -55,7 +55,7 @@ export const Status: Command = {
 
     const lines = [
       `model:        ${payload.model}`,
-      `size:         ${payload.sizeMB ? `${payload.sizeMB}MB` : "-"}`,
+      `size:         ${payload.sizeGB ? `${payload.sizeGB}GB` : "-"}`,
       `status:       ${payload.status}${payload.loaded ? " ✓" : ""}`,
       `memory:       ${payload.loaded ? "loaded" : "-"}`,
       `chats:        ${payload.chats}`,
@@ -72,7 +72,7 @@ export const Download: Command = {
   examples: ["/download"],
   async run(_a, _f, io, ctx) {
     const state = ctx.getState();
-    const total = state.modelSizeMB ?? 639;
+    const total = state.modelSizeGB ?? 1.28;
     const id = "download";
     const modelName = state.modelName ?? "starter.gguf";
     const startMessage = `→ fetching model: ${modelName} (${total}MB)\n  ${bar(0)}`;
@@ -123,6 +123,27 @@ export const Unload: Command = {
     }
     await ctx.actions.unload();
     io.println("model unloaded. (run /load to activate again)");
+  },
+};
+
+export const ClearCache: Command = {
+  name: "clear-cache",
+  summary: "Delete all cached models",
+  usage: "/clear-cache",
+  examples: ["/clear-cache"],
+  async run(_a, _f, io, ctx) {
+    const state = ctx.getState();
+    if (!state.downloaded && !state.loaded) {
+      io.println("no cached models to clear.");
+      return;
+    }
+    if (state.loaded) {
+      io.println("unloading model and clearing cache...");
+    } else {
+      io.println("clearing cached models...");
+    }
+    await ctx.actions.clearCache();
+    io.println("model cache cleared.");
   },
 };
 
